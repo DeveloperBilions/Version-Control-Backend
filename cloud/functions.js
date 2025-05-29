@@ -1,3 +1,65 @@
+Parse.Cloud.define("caseInsensitiveLogin", async (request) => {
+  const { username, password } = request.params;
+
+  if (!username || !password) {
+    throw new Error("username and password are required.");
+  }
+
+  // Create individual queries for email and phone
+  const userQuery = new Parse.Query(Parse.User);
+  userQuery.matches("username", `^${username}$`, "i");
+
+  try {
+    // Find the user
+    const user = await userQuery.first({ useMasterKey: true });
+
+    if (!user) {
+      throw new Parse.Error(404, "User does not exist");
+    }
+
+    // Check if the user is suspended
+    if (user.get("isActive") === false) {
+      throw new Parse.Error(
+        403,
+        "Your account is suspended. Please contact support."
+      );
+    }
+
+    await Parse.User.logIn(username, password);
+
+    // Get all roles the user is in
+    const roleQuery = new Parse.Query(Parse.Role);
+    roleQuery.equalTo("users", user);
+    const roles = await roleQuery.find({ useMasterKey: true });
+
+    const roleNames = roles.map((role) => role.get("name"));
+
+    // Check if user has only "Player" role or no role
+    if (
+      roleNames.length === 0 ||
+      (roleNames.length === 1 && roleNames[0] === "Player")
+    ) {
+      throw new Parse.Error(
+        403,
+        "Access denied. 'Player' role users cannot log in."
+      );
+    }
+
+    return {
+      success: true,
+      user: {
+        objectId: user.id,
+        username: user.get("username"),
+        email: user.get("email"),
+        balance: user.get("balance"),
+        roleName: roleNames[0],
+      },
+    };
+  } catch (error) {
+    throw new Error(`Login failed: ${error.message}`);
+  }
+});
+
 Parse.Cloud.define("latestVersion", async (request) => {
   let { appId, platform, packageId } = request.params;
 
