@@ -25,7 +25,7 @@ Parse.Cloud.define("caseInsensitiveLogin", async (request) => {
       );
     }
 
-    await Parse.User.logIn(username, password);
+    const loggedInUser = await Parse.User.logIn(username, password);
 
     // Get all roles the user is in
     const roleQuery = new Parse.Query(Parse.Role);
@@ -33,17 +33,6 @@ Parse.Cloud.define("caseInsensitiveLogin", async (request) => {
     const roles = await roleQuery.find({ useMasterKey: true });
 
     const roleNames = roles.map((role) => role.get("name"));
-
-    // Check if user has only "Player" role or no role
-    if (
-      roleNames.length === 0 ||
-      (roleNames.length === 1 && roleNames[0] === "Player")
-    ) {
-      throw new Parse.Error(
-        403,
-        "Access denied. 'Player' role users cannot log in."
-      );
-    }
 
     return {
       success: true,
@@ -57,6 +46,92 @@ Parse.Cloud.define("caseInsensitiveLogin", async (request) => {
     };
   } catch (error) {
     throw new Error(`Login failed: ${error.message}`);
+  }
+});
+
+Parse.Cloud.define("createUser", async (request) => {
+  const { username, email, password, confirmpassword, role, manager } =
+    request.params;
+
+  if (
+    !username ||
+    !email ||
+    !password ||
+    !confirmpassword ||
+    !role ||
+    !manager
+  ) {
+    throw new Error("Missing required parameters.");
+  }
+
+  if (password !== confirmpassword) {
+    throw new Error("Passwords do not match.");
+  }
+
+  try {
+    // 🔍 Step 1: Fetch manager user
+    const managerQuery = new Parse.Query(Parse.User);
+    managerQuery.equalTo("objectId", manager);
+    const managerUser = await managerQuery.first({ useMasterKey: true });
+
+    if (!managerUser) {
+      throw new Error("Manager not found.");
+    }
+
+    const managerACL = managerUser.getACL();
+
+    // 🧱 Step 2: Role pointer
+    const Role = Parse.Object.extend("_Role");
+    const rolePointer = new Role();
+    rolePointer.id = role;
+
+    // 👤 Step 3: Create user
+    const user = new Parse.User();
+    user.set("username", username);
+    user.set("email", email);
+    user.set("publicEmail", email);
+    user.set("password", password);
+    user.set("role", rolePointer);
+    user.set("manager", managerUser);
+
+    // 🚀 Step 4: Sign up user
+    const newUser = await user.signUp(null);
+
+    // 🔐 Step 5: Copy manager ACL + add user ACL
+    const newACL = new Parse.ACL();
+
+    if (managerACL && managerACL.permissionsById) {
+      const ids = Object.keys(managerACL.permissionsById);
+      for (const id of ids) {
+        const perms = managerACL.permissionsById[id];
+        if (perms.read) newACL.setReadAccess(id, true);
+        if (perms.write) newACL.setWriteAccess(id, true);
+      }
+    }
+
+    newACL.setReadAccess(newUser.id, true);
+    newACL.setWriteAccess(newUser.id, true);
+
+    newUser.setACL(newACL);
+    await newUser.save(null, { useMasterKey: true });
+
+    // 🎭 Step 6: Add user to Role's users relation
+    const roleQuery = new Parse.Query(Parse.Role);
+    roleQuery.equalTo("objectId", role);
+    const roleObj = await roleQuery.first({ useMasterKey: true });
+
+    if (!roleObj) {
+      throw new Error("Role not found.");
+    }
+
+    roleObj.relation("users").add(newUser);
+    await roleObj.save(null, { useMasterKey: true });
+
+    return { success: true, user: newUser };
+
+    return { success: true, user: newUser };
+  } catch (error) {
+    throw new Error(`User Creation failed: ${error.message}`);
   }
 });
 
