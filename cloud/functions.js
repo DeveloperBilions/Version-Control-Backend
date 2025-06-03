@@ -194,3 +194,62 @@ Parse.Cloud.define("latestVersion", async (request) => {
     }
   }
 });
+
+Parse.Cloud.define("createS3Folder", async (request) => {
+  const AWS = require("aws-sdk");
+
+  try {
+    // Validate input
+    const { folderName } = request.params;
+    if (
+      !folderName ||
+      typeof folderName !== "string" ||
+      folderName.trim() === ""
+    ) {
+      throw new Error("Missing or invalid 'folderName' parameter.");
+    }
+
+    // Validate environment variables
+    const { AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_REGION, S3_BUCKET } =
+      process.env;
+
+    if (!AWS_ACCESS_KEY || !AWS_SECRET_KEY || !AWS_REGION || !S3_BUCKET) {
+      throw new Error("One or more AWS environment variables are not set.");
+    }
+
+    const s3 = new AWS.S3({
+      accessKeyId: AWS_ACCESS_KEY,
+      secretAccessKey: AWS_SECRET_KEY,
+      region: AWS_REGION,
+    });
+
+    const folderKey = `Applications/${folderName}/`;
+
+    const params = {
+      Bucket: S3_BUCKET,
+      Key: folderKey,
+      Body: "",
+    };
+
+    await s3.putObject(params).promise();
+
+    return { success: true, code: 200, folderKey };
+  } catch (error) {
+    // Handle different error types
+    if (error instanceof Parse.Error) {
+      // Return the error if it's a Parse-specific error
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      // Handle any unexpected errors
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to create S3 folder: ${error.message}`,
+      };
+    }
+  }
+});
