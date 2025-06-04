@@ -349,7 +349,7 @@ Parse.Cloud.define("uploadPDF", async (request) => {
 Parse.Cloud.define("getSignedS3Url", async (request) => {
   const AWS = require("aws-sdk");
 
-  const { fullUrl } = request.params;
+  const { fullUrl, disposition } = request.params;
 
   // === Validate input ===
   if (!fullUrl) {
@@ -379,7 +379,9 @@ Parse.Cloud.define("getSignedS3Url", async (request) => {
     Bucket: process.env.S3_BUCKET,
     Key: key,
     Expires: 60, // seconds
-    ResponseContentDisposition: "attachment",
+    ResponseContentDisposition:
+      disposition === "attachment" ? "attachment" : "inline",
+    ResponseContentType: "application/pdf",
   };
 
   try {
