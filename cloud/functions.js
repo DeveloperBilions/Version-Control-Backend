@@ -128,8 +128,6 @@ Parse.Cloud.define("createUser", async (request) => {
     await roleObj.save(null, { useMasterKey: true });
 
     return { success: true, user: newUser };
-
-    return { success: true, user: newUser };
   } catch (error) {
     throw new Error(`User Creation failed: ${error.message}`);
   }
@@ -249,6 +247,160 @@ Parse.Cloud.define("createS3Folder", async (request) => {
         success: false,
         code: 500,
         message: `Failed to create S3 folder: ${error.message}`,
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("uploadPDF", async (request) => {
+  const AWS = require("aws-sdk");
+
+  const { applicationId, version, fileName, fileBase64 } = request.params;
+
+  // === Input validation ===
+  if (!applicationId || !version || !fileName || !fileBase64) {
+    throw new Parse.Error(
+      400,
+      "Missing required parameters: applicationId, version, fileName, fileBase64"
+    );
+  }
+
+  const s3 = new AWS.S3({
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+    region: process.env.AWS_REGION,
+  });
+
+  const parentPrefix = `Applications/${applicationId}/`;
+  const newVersionFolderKey = `Applications/${applicationId}/${version}/`;
+  const fullFileKey = `${newVersionFolderKey}${fileName}`;
+
+  try {
+    // === Step 1: Check if parent folder exists ===
+    const listResult = await s3
+      .listObjectsV2({
+        Bucket: process.env.S3_BUCKET,
+        Prefix: parentPrefix,
+        MaxKeys: 1,
+      })
+      .promise();
+
+    if (!listResult.Contents || listResult.Contents?.length === 0) {
+      throw new Parse.Error(
+        404,
+        `Parent folder ${parentPrefix} does not exist`
+      );
+    }
+
+    // === Step 2: Create version folder marker ===
+    await s3
+      .putObject({
+        Bucket: process.env.S3_BUCKET,
+        Key: newVersionFolderKey,
+        Body: "",
+      })
+      .promise();
+
+    // === Step 3: Decode and upload PDF ===
+    let buffer;
+    try {
+      buffer = Buffer.from(fileBase64, "base64");
+    } catch {
+      throw new Parse.Error(400, "Invalid base64 content");
+    }
+
+    await s3
+      .putObject({
+        Bucket: process.env.S3_BUCKET,
+        Key: fullFileKey,
+        Body: buffer,
+        ContentType: "application/pdf",
+      })
+      .promise();
+
+    return {
+      success: true,
+      message: `Folder and PDF uploaded`,
+      folderKey: newVersionFolderKey,
+      fileKey: fullFileKey,
+      fileUrl: `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET}/${fullFileKey}`,
+    };
+  } catch (error) {
+    console.error("UploadPDF Error:", error);
+    // Handle different error types
+    if (error instanceof Parse.Error) {
+      // Return the error if it's a Parse-specific error
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      // Handle any unexpected errors
+      return {
+        success: false,
+        code: 500,
+        message: "An unexpected error occurred.",
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("getSignedS3Url", async (request) => {
+  const AWS = require("aws-sdk");
+
+  const { fullUrl } = request.params;
+
+  // === Validate input ===
+  if (!fullUrl) {
+    throw new Parse.Error(400, "Missing required parameter: fullUrl");
+  }
+
+  // === Remove the domain part to get the Key ===
+  const prefix = `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET}/`;
+
+  if (!fullUrl.startsWith(prefix)) {
+    throw new Parse.Error(400, "Invalid S3 URL format");
+  }
+
+  // === Extract S3 Key ===
+  const key = fullUrl.replace(prefix, "");
+  if (!key) {
+    throw new Parse.Error(400, "Unable to extract file key from URL");
+  }
+
+  const s3 = new AWS.S3({
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+    region: process.env.AWS_REGION,
+  });
+
+  const params = {
+    Bucket: process.env.S3_BUCKET,
+    Key: key,
+    Expires: 60, // seconds
+    ResponseContentDisposition: "attachment",
+  };
+
+  try {
+    const signedUrl = await s3.getSignedUrlPromise("getObject", params);
+    return { success: true, code: 200, url: signedUrl };
+  } catch (error) {
+    console.error("Error generating signed URL:", error);
+    // Handle different error types
+    if (error instanceof Parse.Error) {
+      // Return the error if it's a Parse-specific error
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      // Handle any unexpected errors
+      return {
+        success: false,
+        code: 500,
+        message: "An unexpected error occurred.",
       };
     }
   }
