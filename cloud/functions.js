@@ -346,6 +346,122 @@ Parse.Cloud.define("uploadPDF", async (request) => {
   }
 });
 
+Parse.Cloud.define("editPDF", async (request) => {
+  const AWS = require("aws-sdk");
+
+  const { applicationId, version, fileName, fileBase64 } = request.params;
+
+  // === Input validation ===
+  if (!applicationId || !version || !fileName || !fileBase64) {
+    throw new Parse.Error(
+      400,
+      "Missing required parameters: applicationId, version, fileName, fileBase64"
+    );
+  }
+
+  const s3 = new AWS.S3({
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+    region: process.env.AWS_REGION,
+  });
+
+  const versionPrefix = `Applications/${applicationId}/${version}/`;
+  const fullFileKey = `${versionPrefix}${fileName}`;
+
+  try {
+    // === Step 1: Check if version folder exists ===
+    const listResult = await s3
+      .listObjectsV2({
+        Bucket: process.env.S3_BUCKET,
+        Prefix: versionPrefix,
+        MaxKeys: 1,
+      })
+      .promise();
+
+    if (!listResult.Contents || listResult.Contents.length === 0) {
+      throw new Parse.Error(
+        404,
+        `Version folder ${versionPrefix} does not exist`
+      );
+    }
+
+    // === Step 2: Delete all files in the version folder ===
+    const objectsToDelete = await s3
+      .listObjectsV2({
+        Bucket: process.env.S3_BUCKET,
+        Prefix: versionPrefix,
+      })
+      .promise();
+
+    // Filter out the "folder marker"
+    const fileKeysOnly = objectsToDelete.Contents.filter(
+      (obj) => obj.Key !== versionPrefix
+    );
+
+    if (fileKeysOnly.length > 0) {
+      const deleteParams = {
+        Bucket: process.env.S3_BUCKET,
+        Delete: {
+          Objects: fileKeysOnly.map((obj) => ({ Key: obj.Key })),
+          Quiet: true,
+        },
+      };
+
+      try {
+        // Delete all files
+        const deleteResult = await s3.deleteObjects(deleteParams).promise();
+        console.log(`Deleted files in folder: ${versionPrefix}`);
+        console.log(deleteResult);
+      } catch (e) {
+        console.error("Deletion failed", e);
+      }
+    }
+
+    // === Step 3: Decode and upload PDF ===
+    let buffer;
+    try {
+      buffer = Buffer.from(fileBase64, "base64");
+    } catch {
+      throw new Parse.Error(400, "Invalid base64 content");
+    }
+
+    await s3
+      .putObject({
+        Bucket: process.env.S3_BUCKET,
+        Key: fullFileKey,
+        Body: buffer,
+        ContentType: "application/pdf",
+      })
+      .promise();
+
+    return {
+      success: true,
+      message: `Folder and PDF uploaded`,
+      folderKey: versionPrefix,
+      fileKey: fullFileKey,
+      fileUrl: `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET}/${fullFileKey}`,
+    };
+  } catch (error) {
+    console.error("UploadPDF Error:", error);
+    // Handle different error types
+    if (error instanceof Parse.Error) {
+      // Return the error if it's a Parse-specific error
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      // Handle any unexpected errors
+      return {
+        success: false,
+        code: 500,
+        message: "An unexpected error occurred.",
+      };
+    }
+  }
+});
+
 Parse.Cloud.define("getSignedS3Url", async (request) => {
   const AWS = require("aws-sdk");
 
