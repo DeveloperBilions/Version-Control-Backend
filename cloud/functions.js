@@ -1,3 +1,5 @@
+const AWS = require("aws-sdk");
+
 Parse.Cloud.define("caseInsensitiveLogin", async (request) => {
   const { username, password } = request.params;
 
@@ -194,7 +196,6 @@ Parse.Cloud.define("latestVersion", async (request) => {
 });
 
 Parse.Cloud.define("createS3Folder", async (request) => {
-  const AWS = require("aws-sdk");
 
   try {
     // Validate input
@@ -221,7 +222,7 @@ Parse.Cloud.define("createS3Folder", async (request) => {
       region: AWS_REGION,
     });
 
-    const folderKey = `Applications/${folderName}/`;
+    const folderKey = `DevApplications/${folderName}/`;
 
     const params = {
       Bucket: S3_BUCKET,
@@ -253,7 +254,6 @@ Parse.Cloud.define("createS3Folder", async (request) => {
 });
 
 Parse.Cloud.define("uploadPDF", async (request) => {
-  const AWS = require("aws-sdk");
 
   const { applicationId, version, fileName, fileBase64 } = request.params;
 
@@ -271,8 +271,8 @@ Parse.Cloud.define("uploadPDF", async (request) => {
     region: process.env.AWS_REGION,
   });
 
-  const parentPrefix = `Applications/${applicationId}/`;
-  const newVersionFolderKey = `Applications/${applicationId}/${version}/`;
+  const parentPrefix = `DevApplications/${applicationId}/`;
+  const newVersionFolderKey = `DevApplications/${applicationId}/${version}/`;
   const fullFileKey = `${newVersionFolderKey}${fileName}`;
 
   try {
@@ -347,7 +347,6 @@ Parse.Cloud.define("uploadPDF", async (request) => {
 });
 
 Parse.Cloud.define("editPDF", async (request) => {
-  const AWS = require("aws-sdk");
 
   const { applicationId, version, fileName, fileBase64 } = request.params;
 
@@ -365,7 +364,7 @@ Parse.Cloud.define("editPDF", async (request) => {
     region: process.env.AWS_REGION,
   });
 
-  const versionPrefix = `Applications/${applicationId}/${version}/`;
+  const versionPrefix = `DevApplications/${applicationId}/${version}/`;
   const fullFileKey = `${versionPrefix}${fileName}`;
 
   try {
@@ -463,7 +462,6 @@ Parse.Cloud.define("editPDF", async (request) => {
 });
 
 Parse.Cloud.define("getSignedS3Url", async (request) => {
-  const AWS = require("aws-sdk");
 
   const { fullUrl, disposition } = request.params;
 
@@ -519,6 +517,275 @@ Parse.Cloud.define("getSignedS3Url", async (request) => {
         success: false,
         code: 500,
         message: "An unexpected error occurred.",
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("createBuildConfig", async (request) => {
+  const { 
+    applicationId, 
+    version, 
+    WebGLVersion, 
+    build_url, 
+    forceUpdate, 
+    manualUpdate, 
+    manualUpdate_message 
+  } = request.params;
+
+  // === Input validation ===
+  if (!applicationId || !version || !build_url) {
+    throw new Parse.Error(
+      400,
+      "Missing required parameters: applicationId, version, build_url"
+    );
+  }
+
+  try {
+    // === Step 1: Ensure S3 folder exists using existing function ===
+    const folderResult = await Parse.Cloud.run("createS3Folder", { folderName: applicationId });
+    if (!folderResult.success) {
+      throw new Parse.Error(500, `Failed to create S3 folder: ${folderResult.message}`);
+    }
+
+    // === Step 2: Setup S3 ===
+    const s3 = new AWS.S3({
+      accessKeyId: process.env.AWS_ACCESS_KEY,
+      secretAccessKey: process.env.AWS_SECRET_KEY,
+      region: process.env.AWS_REGION,
+    });
+
+    const buildConfigKey = `DevApplications/${applicationId}/build.json`;
+
+    // === Step 3: Create build configuration object ===
+    const buildConfig = {
+      latest_build: {
+        version: version,
+        WebGLVersion: WebGLVersion || version,
+        build_url: build_url,
+        forceUpdate: forceUpdate || false,
+        manualUpdate: manualUpdate || false,
+        manualUpdate_message: manualUpdate_message || "",
+        lastUpdated: new Date().toISOString()
+      }
+    };
+
+    // === Step 4: Upload build.json to S3 ===
+    await s3.putObject({
+      Bucket: process.env.S3_BUCKET,
+      Key: buildConfigKey,
+      Body: JSON.stringify(buildConfig, null, 2),
+      ContentType: "application/json",
+    }).promise();
+
+    return {
+      success: true,
+      message: "Build configuration created successfully",
+      buildConfigKey: buildConfigKey,
+      buildConfig: buildConfig
+    };
+  } catch (error) {
+    console.error("CreateBuildConfig Error:", error);
+    if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to create build configuration: ${error.message}`,
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("updateBuildConfig", async (request) => {
+  const { 
+    applicationId, 
+    version, 
+    WebGLVersion, 
+    build_url, 
+    forceUpdate, 
+    manualUpdate, 
+    manualUpdate_message 
+  } = request.params;
+
+  // === Input validation ===
+  if (!applicationId || !version || !build_url) {
+    throw new Parse.Error(
+      400,
+      "Missing required parameters: applicationId, version, build_url"
+    );
+  }
+
+  try {
+    // === Step 1: Ensure S3 folder exists using existing function ===
+    const folderResult = await Parse.Cloud.run("createS3Folder", { folderName: applicationId });
+    if (!folderResult.success) {
+      throw new Parse.Error(500, `Failed to create S3 folder: ${folderResult.message}`);
+    }
+
+    // === Step 2: Setup S3 ===
+    const s3 = new AWS.S3({
+      accessKeyId: process.env.AWS_ACCESS_KEY,
+      secretAccessKey: process.env.AWS_SECRET_KEY,
+      region: process.env.AWS_REGION,
+    });
+
+    const buildConfigKey = `DevApplications/${applicationId}/build.json`;
+
+    // === Step 3: Try to get existing build config ===
+    let existingConfig = {};
+    try {
+      const existingObject = await s3.getObject({
+        Bucket: process.env.S3_BUCKET,
+        Key: buildConfigKey,
+      }).promise();
+      existingConfig = JSON.parse(existingObject.Body.toString());
+    } catch (getError) {
+      // File doesn't exist, will create new one
+      console.log("No existing build config found, creating new one");
+    }
+
+    // === Step 4: Update build configuration ===
+    const updatedConfig = {
+      ...existingConfig,
+      latest_build: {
+        version: version,
+        WebGLVersion: WebGLVersion || version,
+        build_url: build_url,
+        forceUpdate: forceUpdate || false,
+        manualUpdate: manualUpdate || false,
+        manualUpdate_message: manualUpdate_message || "",
+        lastUpdated: new Date().toISOString()
+      }
+    };
+
+    // === Step 5: Upload updated build.json to S3 ===
+    await s3.putObject({
+      Bucket: process.env.S3_BUCKET,
+      Key: buildConfigKey,
+      Body: JSON.stringify(updatedConfig, null, 2),
+      ContentType: "application/json",
+    }).promise();
+
+    return {
+      success: true,
+      message: "Build configuration updated successfully",
+      buildConfigKey: buildConfigKey,
+      buildConfig: updatedConfig
+    };
+  } catch (error) {
+    console.error("UpdateBuildConfig Error:", error);
+    if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to update build configuration: ${error.message}`,
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("getBuildConfig", async (request) => {
+  const { applicationId } = request.params;
+
+  // === Input validation ===
+  if (!applicationId) {
+    throw new Parse.Error(400, "Missing required parameter: applicationId");
+  }
+
+  const s3 = new AWS.S3({
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+    region: process.env.AWS_REGION,
+  });
+
+  const buildConfigKey = `DevApplications/${applicationId}/build.json`;
+
+  try {
+    const result = await s3.getObject({
+      Bucket: process.env.S3_BUCKET,
+      Key: buildConfigKey,
+    }).promise();
+
+    const buildConfig = JSON.parse(result.Body.toString());
+
+    return {
+      success: true,
+      buildConfig: buildConfig,
+      buildConfigUrl: `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET}/${buildConfigKey}`
+    };
+  } catch (error) {
+    console.error("GetBuildConfig Error:", error);
+    if (error.code === 'NoSuchKey') {
+      return {
+        success: false,
+        code: 404,
+        message: "Build configuration not found for this application",
+      };
+    } else if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to get build configuration: ${error.message}`,
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("listApplications", async (request) => {
+  try {
+    const Applications = Parse.Object.extend("Applications");
+    const query = new Parse.Query(Applications);
+    
+    // Add filters to match existing data provider logic
+    query.ascending("appName");
+    query.notEqualTo("isDeleted", true);
+    
+    const results = await query.find({ useMasterKey: true });
+    
+    const applications = results.map(app => ({
+      objectId: app.id,
+      appName: app.get("appName"),
+      packageId: app.get("packageId"),
+      platform: app.get("platform"),
+      createdAt: app.get("createdAt"),
+      updatedAt: app.get("updatedAt")
+    }));
+
+    return {
+      success: true,
+      applications: applications
+    };
+  } catch (error) {
+    console.error("ListApplications Error:", error);
+    if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to list applications: ${error.message}`,
       };
     }
   }
