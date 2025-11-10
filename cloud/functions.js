@@ -790,3 +790,233 @@ Parse.Cloud.define("listApplications", async (request) => {
     }
   }
 });
+
+// ============================================
+// Root Build.json Management APIs
+// ============================================
+
+Parse.Cloud.define("getRootBuildConfig", async (request) => {
+  const s3 = new AWS.S3({
+    accessKeyId: process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+    region: process.env.AWS_REGION,
+  });
+
+  const buildConfigKey = "build.json";
+
+  try {
+    const result = await s3.getObject({
+      Bucket: process.env.S3_BUCKET,
+      Key: buildConfigKey,
+    }).promise();
+
+    const buildConfig = JSON.parse(result.Body.toString());
+
+    return {
+      success: true,
+      buildConfig: buildConfig,
+      buildConfigUrl: `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET}/${buildConfigKey}`
+    };
+  } catch (error) {
+    console.error("GetRootBuildConfig Error:", error);
+    if (error.code === 'NoSuchKey') {
+      return {
+        success: false,
+        code: 404,
+        message: "Build configuration not found at root level",
+      };
+    } else if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to get root build configuration: ${error.message}`,
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("createRootBuildConfig", async (request) => {
+  const { 
+    version, 
+    WebGLVersion, 
+    build_url, 
+    forceUpdate, 
+    manualUpdate, 
+    manualUpdate_message 
+  } = request.params;
+
+  // === Input validation ===
+  if (!version || !build_url) {
+    throw new Parse.Error(
+      400,
+      "Missing required parameters: version, build_url"
+    );
+  }
+
+  try {
+    // === Setup S3 ===
+    const s3 = new AWS.S3({
+      accessKeyId: process.env.AWS_ACCESS_KEY,
+      secretAccessKey: process.env.AWS_SECRET_KEY,
+      region: process.env.AWS_REGION,
+    });
+
+    const buildConfigKey = "build.json";
+
+    // === Check if build.json already exists ===
+    try {
+      await s3.headObject({
+        Bucket: process.env.S3_BUCKET,
+        Key: buildConfigKey,
+      }).promise();
+      
+      // If we reach here, file exists
+      return {
+        success: false,
+        code: 409,
+        message: "Build configuration already exists at root level. Use update instead.",
+      };
+    } catch (headError) {
+      // NoSuchKey means file doesn't exist, which is what we want
+      if (headError.code !== 'NotFound' && headError.code !== 'NoSuchKey') {
+        throw headError;
+      }
+    }
+
+    // === Create build configuration object ===
+    const buildConfig = {
+      latest_build: {
+        version: version,
+        WebGLVersion: WebGLVersion || version,
+        build_url: build_url,
+        forceUpdate: forceUpdate || false,
+        manualUpdate: manualUpdate || false,
+        manualUpdate_message: manualUpdate_message || "",
+        lastUpdated: new Date().toISOString()
+      }
+    };
+
+    // === Upload build.json to S3 root ===
+    await s3.putObject({
+      Bucket: process.env.S3_BUCKET,
+      Key: buildConfigKey,
+      Body: JSON.stringify(buildConfig, null, 2),
+      ContentType: "application/json",
+    }).promise();
+
+    return {
+      success: true,
+      message: "Root build configuration created successfully",
+      buildConfigKey: buildConfigKey,
+      buildConfig: buildConfig
+    };
+  } catch (error) {
+    console.error("CreateRootBuildConfig Error:", error);
+    if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to create root build configuration: ${error.message}`,
+      };
+    }
+  }
+});
+
+Parse.Cloud.define("updateRootBuildConfig", async (request) => {
+  const { 
+    version, 
+    WebGLVersion, 
+    build_url, 
+    forceUpdate, 
+    manualUpdate, 
+    manualUpdate_message 
+  } = request.params;
+
+  // === Input validation ===
+  if (!version || !build_url) {
+    throw new Parse.Error(
+      400,
+      "Missing required parameters: version, build_url"
+    );
+  }
+
+  try {
+    // === Setup S3 ===
+    const s3 = new AWS.S3({
+      accessKeyId: process.env.AWS_ACCESS_KEY,
+      secretAccessKey: process.env.AWS_SECRET_KEY,
+      region: process.env.AWS_REGION,
+    });
+
+    const buildConfigKey = "build.json";
+
+    // === Try to get existing build config ===
+    let existingConfig = {};
+    try {
+      const existingObject = await s3.getObject({
+        Bucket: process.env.S3_BUCKET,
+        Key: buildConfigKey,
+      }).promise();
+      existingConfig = JSON.parse(existingObject.Body.toString());
+    } catch (getError) {
+      // File doesn't exist, will create new one
+      console.log("No existing root build config found, creating new one");
+    }
+
+    // === Update build configuration ===
+    const updatedConfig = {
+      ...existingConfig,
+      latest_build: {
+        version: version,
+        WebGLVersion: WebGLVersion || version,
+        build_url: build_url,
+        forceUpdate: forceUpdate || false,
+        manualUpdate: manualUpdate || false,
+        manualUpdate_message: manualUpdate_message || "",
+        lastUpdated: new Date().toISOString()
+      }
+    };
+
+    // === Upload updated build.json to S3 root ===
+    await s3.putObject({
+      Bucket: process.env.S3_BUCKET,
+      Key: buildConfigKey,
+      Body: JSON.stringify(updatedConfig, null, 2),
+      ContentType: "application/json",
+    }).promise();
+
+    return {
+      success: true,
+      message: "Root build configuration updated successfully",
+      buildConfigKey: buildConfigKey,
+      buildConfig: updatedConfig
+    };
+  } catch (error) {
+    console.error("UpdateRootBuildConfig Error:", error);
+    if (error instanceof Parse.Error) {
+      return {
+        success: false,
+        code: error.code,
+        message: error.message,
+      };
+    } else {
+      return {
+        success: false,
+        code: 500,
+        message: `Failed to update root build configuration: ${error.message}`,
+      };
+    }
+  }
+});
