@@ -802,7 +802,7 @@ Parse.Cloud.define("getRootBuildConfig", async (request) => {
     region: process.env.AWS_REGION,
   });
 
-  const buildConfigKey = "build.json";
+  const buildConfigKey = "Game-Build/build.json";
 
   try {
     const result = await s3.getObject({
@@ -823,7 +823,7 @@ Parse.Cloud.define("getRootBuildConfig", async (request) => {
       return {
         success: false,
         code: 404,
-        message: "Build configuration not found at root level",
+        message: "Build configuration not found in Game-Build folder",
       };
     } else if (error instanceof Parse.Error) {
       return {
@@ -867,7 +867,7 @@ Parse.Cloud.define("createRootBuildConfig", async (request) => {
       region: process.env.AWS_REGION,
     });
 
-    const buildConfigKey = "build.json";
+    const buildConfigKey = "Game-Build/build.json";
 
     // === Check if build.json already exists ===
     try {
@@ -880,7 +880,7 @@ Parse.Cloud.define("createRootBuildConfig", async (request) => {
       return {
         success: false,
         code: 409,
-        message: "Build configuration already exists at root level. Use update instead.",
+        message: "Build configuration already exists in Game-Build folder. Use update instead.",
       };
     } catch (headError) {
       // NoSuchKey means file doesn't exist, which is what we want
@@ -902,7 +902,7 @@ Parse.Cloud.define("createRootBuildConfig", async (request) => {
       }
     };
 
-    // === Upload build.json to S3 root ===
+    // === Upload build.json to Game-Build folder ===
     await s3.putObject({
       Bucket: process.env.S3_BUCKET,
       Key: buildConfigKey,
@@ -960,7 +960,7 @@ Parse.Cloud.define("updateRootBuildConfig", async (request) => {
       region: process.env.AWS_REGION,
     });
 
-    const buildConfigKey = "build.json";
+    const buildConfigKey = "Game-Build/build.json";
 
     // === Try to get existing build config ===
     let existingConfig = {};
@@ -989,7 +989,7 @@ Parse.Cloud.define("updateRootBuildConfig", async (request) => {
       }
     };
 
-    // === Upload updated build.json to S3 root ===
+    // === Upload updated build.json to Game-Build folder ===
     await s3.putObject({
       Bucket: process.env.S3_BUCKET,
       Key: buildConfigKey,
